@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>服务器集群管理</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-ui@2.15.14/lib/theme-chalk/index.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="stylesheet" href="static/cluster.css">
+</head>
+<body>
+    <div id="app">
+        <!-- 顶部导航 -->
+        <div class="cluster-header">
+            <div class="header-left">
+                <i class="fas fa-server header-icon"></i>
+                <h1>服务器集群管理</h1>
+                <span class="version-badge">v1.0.0</span>
+            </div>
+            <div class="header-right">
+                <el-button-group>
+                    <el-button size="small" @click="checkAllServers" :loading="checkingAll">
+                        <i class="fas fa-sync-alt"></i> 状态检测
+                    </el-button>
+                    <el-button size="small" type="primary" @click="showAddServerDialog">
+                        <i class="fas fa-plus"></i> 添加服务器
+                    </el-button>
+                    <el-button size="small" type="success" @click="showAddGroupDialog">
+                        <i class="fas fa-folder-plus"></i> 添加分组
+                    </el-button>
+                    <el-button size="small" @click="showSettingsDialog">
+                        <i class="fas fa-cog"></i> 设置
+                    </el-button>
+                </el-button-group>
+            </div>
+        </div>
+
+        <!-- 服务状态栏 -->
+        <div class="service-bar">
+            <div class="service-item">
+                <span class="label">服务状态:</span>
+                <span class="value" :class="pluginStatus.running ? 'status-on' : 'status-off'">
+                    <i :class="pluginStatus.running ? 'fas fa-check-circle' : 'fas fa-times-circle'"></i>
+                    {{ pluginStatus.running ? '运行中' : '已停止' }}
+                </span>
+                <span class="pid-info" v-if="pluginStatus.pid">PID: {{ pluginStatus.pid }}</span>
+            </div>
+            <div class="service-item">
+                <span class="label">端口:</span>
+                <span class="value">{{ pluginStatus.port }}</span>
+            </div>
+            <div class="service-item">
+                <span class="label">架构:</span>
+                <span class="value">{{ pluginStatus.arch }}</span>
+            </div>
+            <div class="service-actions">
+                <el-button size="mini" type="success" @click="startPlugin" :disabled="pluginStatus.running" :loading="operating">
+                    <i class="fas fa-play"></i> 启动
+                </el-button>
+                <el-button size="mini" type="danger" @click="stopPlugin" :disabled="!pluginStatus.running" :loading="operating">
+                    <i class="fas fa-stop"></i> 停止
+                </el-button>
+                <el-button size="mini" type="warning" @click="restartPlugin" :disabled="!pluginStatus.running" :loading="operating">
+                    <i class="fas fa-redo"></i> 重启
+                </el-button>
+                <el-button size="mini" @click="reloadPlugin" :disabled="!pluginStatus.running" :loading="operating">
+                    <i class="fas fa-sync"></i> 重载配置
+                </el-button>
+            </div>
+        </div>
+
+        <!-- 自启动栏 -->
+        <div class="auto-start-bar">
+            <span class="label">自启动:</span>
+            <el-switch
+                v-model="autoStartEnabled"
+                @change="toggleAutoStart"
+                active-text="开启"
+                inactive-text="关闭">
+            </el-switch>
+            <span class="db-info">数据库: {{ pluginStatus.db_type === 'sqlite' ? 'SQLite (本地)' : pluginStatus.db_type.toUpperCase() }}</span>
+        </div>
+
+        <!-- 分组标签页 -->
+        <div class="group-tabs">
+            <el-tabs v-model="activeGroup" type="border-card" @tab-click="handleGroupClick">
+                <el-tab-pane label="全部服务器" name="all">
+                    <span slot="label"><i class="fas fa-th-list"></i> 全部服务器</span>
+                </el-tab-pane>
+                <el-tab-pane v-for="group in groups" :key="group.id" :label="group.name" :name="'group-' + group.id">
+                    <span slot="label">
+                        <i class="fas fa-folder" :style="{color: group.color}"></i>
+                        {{ group.name }}
+                        <el-tag size="mini" type="info">{{ group.server_count }}</el-tag>
+                    </span>
+                </el-tab-pane>
+            </el-tabs>
+        </div>
+
+        <!-- 服务器卡片列表 (拖拽支持) -->
+        <div class="server-list" id="serverList">
+            <div v-if="filteredServers.length === 0" class="empty-state">
+                <i class="fas fa-server empty-icon"></i>
+                <p>暂无服务器，点击"添加服务器"开始管理</p>
+            </div>
+            <draggable
+                v-model="filteredServers"
+                group="servers"
+                @end="onDragEnd"
+                handle=".drag-handle"
+                :animation="200"
+                ghost-class="ghost-card">
+                <div v-for="server in filteredServers" :key="server.id" class="server-card" :style="{borderLeft: '4px solid ' + (server.group_color || '#409EFF')}">
+                    <div class="card-header">
+                        <div class="drag-handle" title="拖拽排序">
+                            <i class="fas fa-grip-vertical"></i>
+                        </div>
+                        <div class="server-status-indicator" :class="server.status === 1 ? 'online' : 'offline'">
+                            <i :class="server.status === 1 ? 'fas fa-circle' : 'fas fa-circle'"></i>
+                        </div>
+                        <div class="server-name">{{ server.name }}</div>
+                        <el-tag size="mini" :type="server.status === 1 ? 'success' : 'danger'">
+                            {{ server.status === 1 ? '在线' : '离线' }}
+                        </el-tag>
+                        <el-tag size="mini" v-if="server.arch" type="info">{{ server.arch }}</el-tag>
+                        <div class="card-actions">
+                            <el-button size="mini" circle icon="el-icon-refresh" @click="checkServer(server.id)" title="检测状态"></el-button>
+                            <el-button size="mini" circle icon="el-icon-edit" @click="showEditServerDialog(server)" title="编辑"></el-button>
+                            <el-button size="mini" circle icon="el-icon-delete" type="danger" @click="deleteServer(server)" title="删除"></el-button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="info-row">
+                            <i class="fas fa-link"></i>
+                            <span class="label">地址:</span>
+                            <span class="value">{{ server.url }}</span>
+                        </div>
+                        <div class="info-row">
+                            <i class="fas fa-code-branch"></i>
+                            <span class="label">版本:</span>
+                            <span class="value">{{ server.version || '未知' }}</span>
+                        </div>
+                        <div class="info-row" v-if="server.os_info">
+                            <i class="fas fa-laptop"></i>
+                            <span class="label">系统:</span>
+                            <span class="value">{{ server.os_info }}</span>
+                        </div>
+                        <div class="info-row" v-if="server.last_heartbeat">
+                            <i class="fas fa-clock"></i>
+                            <span class="label">最后心跳:</span>
+                            <span class="value">{{ server.last_heartbeat }}</span>
+                        </div>
+                        <div class="info-row" v-if="server.remark">
+                            <i class="fas fa-sticky-note"></i>
+                            <span class="label">备注:</span>
+                            <span class="value">{{ server.remark }}</span>
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <div class="progress-group">
+                            <div class="progress-item" title="CPU使用率">
+                                <span class="progress-label">CPU</span>
+                                <el-progress :percentage="server.cpu_usage || 0" :stroke-width="8"
+                                    :color="server.cpu_usage > 80 ? '#F56C6C' : server.cpu_usage > 50 ? '#E6A23C' : '#67C23A'">
+                                </el-progress>
+                            </div>
+                            <div class="progress-item" title="内存使用率">
+                                <span class="progress-label">内存</span>
+                                <el-progress :percentage="server.memory_usage || 0" :stroke-width="8"
+                                    :color="server.memory_usage > 80 ? '#F56C6C' : server.memory_usage > 50 ? '#E6A23C' : '#67C23A'">
+                                </el-progress>
+                            </div>
+                            <div class="progress-item" title="磁盘使用率">
+                                <span class="progress-label">磁盘</span>
+                                <el-progress :percentage="server.disk_usage || 0" :stroke-width="8"
+                                    :color="server.disk_usage > 80 ? '#F56C6C' : server.disk_usage > 50 ? '#E6A23C' : '#67C23A'">
+                                </el-progress>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </draggable>
+        </div>
+
+        <!-- 添加/编辑服务器对话框 -->
+        <el-dialog :title="serverDialogTitle" :visible.sync="serverDialogVisible" width="550px" :close-on-click-modal="false">
+            <el-form :model="serverForm" :rules="serverRules" ref="serverForm" label-width="100px" size="small">
+                <el-form-item label="服务器名称" prop="name">
+                    <el-input v-model="serverForm.name" placeholder="例如：主服务器-01"></el-input>
+                </el-form-item>
+                <el-form-item label="面板地址" prop="url">
+                    <el-input v-model="serverForm.url" placeholder="http://192.168.1.100:8888"></el-input>
+                </el-form-item>
+                <el-form-item label="所属分组">
+                    <el-select v-model="serverForm.group_id" placeholder="选择分组" style="width:100%">
+                        <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id">
+                            <span><i class="fas fa-folder" :style="{color: g.color}"></i> {{ g.name }}</span>
+                        </el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="API Key">
+                    <el-input v-model="serverForm.api_key" placeholder="面板API密钥(可选)" show-password></el-input>
+                </el-form-item>
+                <el-form-item label="Secret Key">
+                    <el-input v-model="serverForm.secret_key" placeholder="面板Secret密钥(可选)" show-password></el-input>
+                </el-form-item>
+                <el-form-item label="备注信息">
+                    <el-input v-model="serverForm.remark" type="textarea" rows="3" placeholder="可填写服务器用途、位置等备注"></el-input>
+                </el-form-item>
+            </el-form>
+            <span slot="footer">
+                <el-button @click="serverDialogVisible = false" size="small">取消</el-button>
+                <el-button type="primary" @click="submitServer" size="small" :loading="submitting">确定</el-button>
+            </span>
+        </el-dialog>
+
+        <!-- 添加分组对话框 -->
+        <el-dialog title="添加分组" :visible.sync="groupDialogVisible" width="400px" :close-on-click-modal="false">
+            <el-form :model="groupForm" ref="groupForm" label-width="80px" size="small">
+                <el-form-item label="分组名称" prop="name">
+                    <el-input v-model="groupForm.name" placeholder="例如：生产环境"></el-input>
+                </el-form-item>
+                <el-form-item label="标签颜色">
+                    <el-color-picker v-model="groupForm.color"></el-color-picker>
+                </el-form-item>
+            </el-form>
+            <span slot="footer">
+                <el-button @click="groupDialogVisible = false" size="small">取消</el-button>
+                <el-button type="primary" @click="submitGroup" size="small" :loading="submitting">确定</el-button>
+            </span>
+        </el-dialog>
+
+        <!-- 设置对话框 -->
+        <el-dialog title="集群设置" :visible.sync="settingsDialogVisible" width="700px" :close-on-click-modal="false">
+            <el-tabs v-model="settingsTab">
+                <el-tab-pane label="主服务设置" name="main">
+                    <el-form :model="settingsForm" label-width="120px" size="small">
+                        <el-form-item label="集群名称">
+                            <el-input v-model="settingsForm.cluster_name" placeholder="默认集群"></el-input>
+                        </el-form-item>
+                        <el-form-item label="监听端口">
+                            <el-input-number v-model="settingsForm.listen_port" :min="1024" :max="65535"></el-input-number>
+                        </el-form-item>
+                        <el-form-item label="同步间隔(秒)">
+                            <el-input-number v-model="settingsForm.sync_interval" :min="10" :max="3600"></el-input-number>
+                        </el-form-item>
+                    </el-form>
+                </el-tab-pane>
+                <el-tab-pane label="数据库配置" name="database">
+                    <div class="db-config-section">
+                        <el-radio-group v-model="settingsForm.db_type" size="small">
+                            <el-radio-button label="sqlite">SQLite (本地)</el-radio-button>
+                            <el-radio-button label="mysql">MySQL</el-radio-button>
+                            <el-radio-button label="mariadb">MariaDB</el-radio-button>
+                            <el-radio-button label="pgsql">PostgreSQL</el-radio-button>
+                        </el-radio-group>
+                    </div>
+
+                    <div v-if="settingsForm.db_type === 'mysql'" class="db-config-form">
+                        <h4><i class="fas fa-database"></i> MySQL 配置</h4>
+                        <el-form label-width="100px" size="small">
+                            <el-row :gutter="20">
+                                <el-col :span="12">
+                                    <el-form-item label="主机地址">
+                                        <el-input v-model="dbConfigs.mysql.host" placeholder="127.0.0.1"></el-input>
+                                    </el-form-item>
+                                </el-col>
+                                <el-col :span="12">
+                                    <el-form-item label="端口">
+                                        <el-input-number v-model="dbConfigs.mysql.port" :min="1" :max="65535"></el-input-number>
+                                    </el-form-item>
+                                </el-col>
+                            </el-row>
+                            <el-row :gutter="20">
+                                <el-col :span="12">
+                                    <el-form-item label="用户名">
+                                        <el-input v-model="dbConfigs.mysql.user" placeholder="root"></el-input>
+                                    </el-form-item>
+                                </el-col>
+                                <el-col :span="12">
+                                    <el-form-item label="密码">
+                                        <el-input v-model="dbConfigs.mysql.password" show-password></el-input>
+                                    </el-form-item>
+                                </el-col>
+                            </el-row>
+                            <el-form-item label="数据库名">
+                                <el-input v-model="dbConfigs.mysql.database" placeholder="mw_cluster"></el-input>
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="testDbConnection('mysql')" :loading="testingDb">
+                                    <i class="fas fa-plug"></i> 测试连接
+                                </el-button>
+                            </el-form-item>
+                        </el-form>
+                    </div>
+
+                    <div v-if="settingsForm.db_type === 'pgsql'" class="db-config-form">
+                        <h4><i class="fas fa-database"></i> PostgreSQL 配置</h4>
+                        <el-form label-width="100px" size="small">
+                            <el-row :gutter="20">
+                                <el-col :span="12">
+                                    <el-form-item label="主机地址">
+                                        <el-input v-model="dbConfigs.pgsql.host" placeholder="127.0.0.1"></el-input>
+                                    </el-form-item>
+                                </el-col>
+                                <el-col :span="12">
+                                    <el-form-item label="端口">
+                                        <el-input-number v-model="dbConfigs.pgsql.port" :min="1" :max="65535"></el-input-number>
+                                    </el-form-item>
+                                </el-col>
+                            </el-row>
+                            <el-row :gutter="20">
+                                <el-col :span="12">
+                                    <el-form-item label="用户名">
+                                        <el-input v-model="dbConfigs.pgsql.user" placeholder="postgres"></el-input>
+                                    </el-form-item>
+                                </el-col>
+                                <el-col :span="12">
+                                    <el-form-item label="密码">
+                                        <el-input v-model="dbConfigs.pgsql.password" show-password></el-input>
+                                    </el-form-item>
+                                </el-col>
+                            </el-row>
+                            <el-form-item label="数据库名">
+                                <el-input v-model="dbConfigs.pgsql.database" placeholder="mw_cluster"></el-input>
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="testDbConnection('pgsql')" :loading="testingDb">
+                                    <i class="fas fa-plug"></i> 测试连接
+                                </el-button>
+                            </el-form-item>
+                        </el-form>
+                    </div>
+
+                    <div v-if="settingsForm.db_type === 'mariadb'" class="db-config-form">
+                        <h4><i class="fas fa-database"></i> MariaDB 配置</h4>
+                        <el-form label-width="100px" size="small">
+                            <el-row :gutter="20">
+                                <el-col :span="12">
+                                    <el-form-item label="主机地址">
+                                        <el-input v-model="dbConfigs.mariadb.host" placeholder="127.0.0.1"></el-input>
+                                    </el-form-item>
+                                </el-col>
+                                <el-col :span="12">
+                                    <el-form-item label="端口">
+                                        <el-input-number v-model="dbConfigs.mariadb.port" :min="1" :max="65535"></el-input-number>
+                                    </el-form-item>
+                                </el-col>
+                            </el-row>
+                            <el-row :gutter="20">
+                                <el-col :span="12">
+                                    <el-form-item label="用户名">
+                                        <el-input v-model="dbConfigs.mariadb.user" placeholder="root"></el-input>
+                                    </el-form-item>
+                                </el-col>
+                                <el-col :span="12">
+                                    <el-form-item label="密码">
+                                        <el-input v-model="dbConfigs.mariadb.password" show-password></el-input>
+                                    </el-form-item>
+                                </el-col>
+                            </el-row>
+                            <el-form-item label="数据库名">
+                                <el-input v-model="dbConfigs.mariadb.database" placeholder="mw_cluster"></el-input>
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="testDbConnection('mariadb')" :loading="testingDb">
+                                    <i class="fas fa-plug"></i> 测试连接
+                                </el-button>
+                            </el-form-item>
+                        </el-form>
+                    </div>
+                </el-tab-pane>
+                <el-tab-pane label="子面板服务" name="subpanel">
+                    <div class="sub-panel-config">
+                        <h4><i class="fas fa-cubes"></i> 子面板服务配置</h4>
+                        <p class="help-text">配置子面板的连接参数，用于管理多个面板实例</p>
+                        <el-form label-width="120px" size="small">
+                            <el-form-item label="子面板API地址">
+                                <el-input v-model="subPanelConfig.api_url" placeholder="http://sub-panel:8888/api"></el-input>
+                            </el-form-item>
+                            <el-form-item label="子面板密钥">
+                                <el-input v-model="subPanelConfig.api_key" show-password></el-input>
+                            </el-form-item>
+                            <el-form-item label="同步间隔(秒)">
+                                <el-input-number v-model="subPanelConfig.sync_interval" :min="10" :max="3600"></el-input-number>
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="saveSubPanelConfig" :loading="submitting">
+                                    <i class="fas fa-save"></i> 保存配置
+                                </el-button>
+                            </el-form-item>
+                        </el-form>
+                    </div>
+                </el-tab-pane>
+            </el-tabs>
+            <span slot="footer">
+                <el-button @click="settingsDialogVisible = false" size="small">关闭</el-button>
+                <el-button type="primary" @click="saveSettings" size="small" :loading="submitting">保存设置</el-button>
+            </span>
+        </el-dialog>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.7.14/dist/vue.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/element-ui@2.15.14/lib/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vuedraggable@2.24.3/dist/vuedraggable.umd.min.js"></script>
+    <script src="static/cluster.js"></script>
+</body>
+</html>
