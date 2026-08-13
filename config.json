@@ -1,0 +1,29 @@
+{
+    "db_type": "sqlite",
+    "mysql_config": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "root",
+        "password": "",
+        "database": "mw_cluster"
+    },
+    "pgsql_config": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "user": "postgres",
+        "password": "",
+        "database": "mw_cluster"
+    },
+    "mariadb_config": {
+        "host": "127.0.0.1",
+        "port": 3307,
+        "user": "root",
+        "password": "",
+        "database": "mw_cluster"
+    },
+    "auto_start": false,
+    "listen_port": 18700,
+    "secret_key": "",
+    "cluster_name": "默认集群",
+    "sync_interval": 60
+}
