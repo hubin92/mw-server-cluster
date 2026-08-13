@@ -1,1 +1,19 @@
-
+{
+    "name": "mw-server-cluster",
+    "title": "服务器集群管理",
+    "description": "管理多台服务器面板的集群管理插件，支持面板分组、拖拽排序、服务状态管理、数据库配置等功能",
+    "author": "mdserver-cluster",
+    "version": "1.0.0",
+    "arch": ["amd64", "arm64", "armhf"],
+    "os": ["linux"],
+    "type": "soft",
+    "icon": "fa-server",
+    "category": "cluster",
+    "dependencies": {
+        "python": ">=3.6"
+    },
+    "settings": {
+        "db_type": "sqlite",
+        "auto_start": false
+    }
+}
