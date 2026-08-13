@@ -1,0 +1,18 @@
+{
+    "id": "mw-server-cluster",
+    "name": "mw-server-cluster",
+    "title": "服务器集群管理",
+    "version": "1.0.0",
+    "description": "管理多台服务器面板的集群管理插件",
+    "author": "mdserver-cluster",
+    "website": "https://github.com/midoks/mdserver-web",
+    "install_type": "zip",
+    "auto_start": 0,
+    "dependencies": [],
+    "scripts": {
+        "pre_install": [],
+        "post_install": [],
+        "pre_uninstall": [],
+        "post_uninstall": []
+    }
+}
